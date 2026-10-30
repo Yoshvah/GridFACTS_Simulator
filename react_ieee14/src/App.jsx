@@ -39,7 +39,7 @@ export default function App() {
     });
     return initial;
   });
-  const [faultBus, setFaultBus] = useState(2);
+
 
   // ============================================================
   // NAVIGATION
@@ -104,27 +104,46 @@ export default function App() {
   // ============================================================
   // LANCEMENT DE LA STABILITÉ
   // ============================================================
-  const lancerStabilite = async (buses, branches, faultBus) => {
+  const lancerStabilite = async (params) => {
     setStabilityData(null);
     setLoading(true);
-    setPage("stabilite");
-
     try {
-      const reponse = await fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/api/stability`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ buses, branches, fault_bus: faultBus, duration: 5.0 }),
-      });
-
-      if (!reponse.ok) {
-        const errData = await reponse.json();
-        throw new Error(errData.detail || "Erreur lors du calcul de stabilité");
+      const buses = [];
+      const branches = [];
+      for (let i = 1; i <= 14; i++) {
+        const type = String(form[`n${i}_type`] || "PQ").toUpperCase();
+        buses.push([
+          i, type === "SLACK" ? 3 : type === "PV" ? 2 : 1,
+          Number(form[`n${i}_p`] || 0) / 100,
+          Number(form[`n${i}_q`] || 0) / 100,
+          Number(form[`n${i}_v`] || 1),
+          Number(form[`n${i}_theta`] || 0),
+          Number(form[`n${i}_bsh`] || 0)
+        ]);
       }
-
-      const data = await reponse.json();
+      for (let i = 1; i <= 20; i++) {
+        if (form[`b${i}_dep`] && form[`b${i}_arr`]) {
+          branches.push([
+            Number(form[`b${i}_dep`]), Number(form[`b${i}_arr`]),
+            Number(form[`b${i}_r`] || 0), Number(form[`b${i}_x`] || 0.01),
+            Number(form[`b${i}_b`] || 0), Number(form[`b${i}_tap`] || 0)
+          ]);
+        }
+      }
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/api/stability`,
+        {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ buses, branches, ...params })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(
+        typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)
+      );
       setStabilityData(data);
-    } catch (err) {
-      console.error(err);
-      alert("Erreur de stabilité : " + err.message);
+    } catch (error) {
+      setStabilityData({ error: error.message });
     } finally {
       setLoading(false);
     }
@@ -177,10 +196,7 @@ export default function App() {
           <Saisie 
             form={form} 
             setForm={setForm} 
-            faultBus={faultBus} 
-            setFaultBus={setFaultBus} 
             onCalculer={lancerSimulation} 
-            onStabilite={lancerStabilite} 
           />
         )}
         
@@ -213,7 +229,7 @@ export default function App() {
         )}
         
         {page === "stabilite" && (
-          <Stabilite data={stabilityData} />
+          <Stabilite data={stabilityData} onSimuler={lancerStabilite} loading={loading} branches={DONNEES_IEEE14.branches} />
         )}
 
         {/* NOUVELLE PAGE OPTIMISATION */}

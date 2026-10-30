@@ -20,7 +20,7 @@ const reglesModification = {
 // COMPOSANT PRINCIPAL : SAISIE
 // ============================================================
 export default function Saisie({ 
-  form, setForm, faultBus, setFaultBus, onCalculer, onStabilite 
+  form, setForm, onCalculer 
 }) {
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -122,10 +122,6 @@ export default function Saisie({
     onCalculer(buses, branches, [], []); 
   };
 
-  const lancerStabilite = () => {
-    const { buses, branches } = extraireDonnees();
-    onStabilite(buses, branches, Number(faultBus));
-  };
 
   return (
     <div className="max-w-6xl mx-auto p-6">
@@ -219,24 +215,7 @@ export default function Saisie({
         </table>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        <div className="flex flex-col gap-3 p-4 bg-purple-50 rounded-lg border border-purple-200 shadow-sm">
-          <h3 className="font-semibold text-purple-800 text-sm flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500"></span>
-            Simulation de Défaut
-          </h3>
-          <div className="flex items-center gap-4">
-            <label className="text-sm font-medium text-purple-900">Bus en défaut :</label>
-            <input type="number" min="1" max="14" value={faultBus} onChange={(e) => setFaultBus(e.target.value)} className="w-24 rounded border border-purple-300 bg-white p-2 text-center font-bold focus:outline-none focus:ring-2 focus:ring-purple-500" />
-          </div>
-          <p className="text-xs text-purple-700">Modèle de déséquilibre de puissance simplifié : le nœud choisi ne représente pas encore un court-circuit localisé.</p>
-        </div>
-      </div>
-
       <div className="flex flex-col sm:flex-row justify-end gap-4 mt-8 bg-white border border-slate-200 p-6 rounded-lg shadow-sm">
-        <button onClick={lancerStabilite} className="bg-purple-600 text-white px-6 py-3 rounded-lg font-semibold shadow hover:bg-purple-700 transition flex items-center justify-center gap-2">
-          📈 Simuler Stabilité
-        </button>
         <button onClick={lancerCalcul} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-semibold shadow hover:bg-blue-700 transition flex items-center justify-center gap-2">
           ⚡ Lancer Load Flow
         </button>

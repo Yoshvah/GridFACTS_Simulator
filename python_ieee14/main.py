@@ -57,9 +57,25 @@ class OptimizationRequest(NetworkData):
     pso_config: PSOConfig = PSOConfig()
 
 class StabilityRequest(NetworkData):
-    fault_bus: int
-    fault_clear_time: float = 0.2
-    duration: float = 5.0
+    perturbation: str = "pv"
+    bus_id: int = 14
+    line_index: int = 0
+    start_time: float = 1.0
+    end_time: float | None = None
+    initial_power: float = 0.0
+    final_power: float = 50.0
+    duration: float = 10.0
+    dt: float = 0.02
+    compare_facts: bool = True
+    fact_type: str = "SVC"
+    fact_bus: int = 9
+    fact_b: float = -0.15
+    inertia: float = 5.0
+    damping: float = 1.0
+    synchronizing: float = 4.0
+    # Compatibilité ancien client
+    fault_bus: int | None = None
+    fault_clear_time: float | None = None
 
 # ============================================================
 # ENDPOINT : LOAD FLOW
@@ -173,53 +189,18 @@ def run_loadflow(data: NetworkData):
 # ============================================================
 @app.post("/api/stability")
 def run_stability(data: StabilityRequest):
-    try:
-        if data.fault_bus not in {int(b[0]) for b in data.buses}:
-            raise HTTPException(status_code=422, detail="Nœud de perturbation inconnu")
-        if not 0 < data.fault_clear_time < data.duration:
-            raise HTTPException(status_code=422, detail="Durée de perturbation invalide")
-        solver = PowerFlowSolver(100.0, data.buses, data.branches)
-        
-        if data.facts:
-            try:
-                ids, ybus = calculate_ybus(data.buses, data.branches)
-                for fact in data.facts:
-                    if fact.type == "SVC" and fact.bus_id in ids:
-                        bus_idx = ids.index(fact.bus_id)
-                        ybus = add_svc(ybus, bus_idx, fact.param1)
-                solver.Ybus = ybus
-            except: pass
-            
-        Vm, Va, P, Q, _ = solver.solve()
-        
-        gen_buses = [b for b in data.buses if int(b[1]) in (2, 3)]
-        gen_ids = [int(b[0]) for b in gen_buses]
-        H = [5.0 for _ in gen_ids]
-        D = [0.1 for _ in gen_ids]
-        id_to_index = {int(b[0]): i for i, b in enumerate(data.buses)}
-        delta0 = [np.radians(Va[id_to_index[gen_id]]) for gen_id in gen_ids]
-        speed0 = [0.0 for _ in gen_ids]
-        Pm = [P[id_to_index[gen_id]] / 100.0 for gen_id in gen_ids]
+    """Réponse dynamique indicative avec réseau quasi-statique et swing linéarisé.
 
-        def Pe(t, delta, speed):
-            if t < data.fault_clear_time:
-                return [pm * 0.1 for pm in Pm]
-            return Pm
-        
-        res = simulate_swing(
-            delta0=delta0, speed0=speed0, inertia=H, damping=D,
-            mechanical_power=Pm, electrical_power=Pe,
-            duration=data.duration, dt=0.01
-        )
-        
-        return {
-            "model_limitations": "Modèle simplifié de déséquilibre de puissance : le nœud sélectionné n’est pas encore utilisé pour calculer un court-circuit localisé.",
-            "time": res['time'].tolist(),
-            "generators": [{"bus": gid, "delta": np.rad2deg(res['delta'][:, i]).tolist()} for i, gid in enumerate(gen_ids)],
-            "history": [{"time": round(t, 2), "angles": [round(np.rad2deg(d), 2) for d in deltas]} for t, deltas in zip(res['time'][::50], res['delta'][::50])]
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    Les flux avant/après proviennent de Newton-Raphson; les angles/vitesses sont
+    issus d'un modèle équivalent simplifié, pas d'un modèle EMT/transitoire validé.
+    """
+    try:
+        from calculations.stability_scenarios import simulate_scenarios
+        return simulate_scenarios(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 # ============================================================
 # ENDPOINT : OPTIMISATION (PSO)
