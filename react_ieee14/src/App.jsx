@@ -23,7 +23,8 @@ export default function App() {
   
   const [activeFacts, setActiveFacts] = useState([]); 
   const [activeSolars, setActiveSolars] = useState([]); 
-  const [currentNetwork, setCurrentNetwork] = useState(null); 
+  const [currentNetwork, setCurrentNetwork] = useState(null);
+  const [networkVersion, setNetworkVersion] = useState(0); 
 
   // ============================================================
   // ÉTATS PERSISTANTS DU FORMULAIRE SAISIE
@@ -37,6 +38,9 @@ export default function App() {
     DONNEES_IEEE14.branches.forEach(([dep, arr, r, x, b, tap], i) => {
       Object.assign(initial, { [`b${i+1}_dep`]: dep, [`b${i+1}_arr`]: arr, [`b${i+1}_r`]: r, [`b${i+1}_x`]: x, [`b${i+1}_b`]: b, [`b${i+1}_tap`]: tap });
     });
+    initial.bus_count = DONNEES_IEEE14.buses.length;
+    initial.branch_count = DONNEES_IEEE14.branches.length;
+    initial.base_mva = 100;
     return initial;
   });
 
@@ -49,14 +53,14 @@ export default function App() {
   // ============================================================
   // LANCEMENT DU LOAD FLOW
   // ============================================================
-  const lancerSimulation = async (buses, branches, facts, solars) => {
+  const lancerSimulation = async (buses, branches, facts, solars, generators = []) => {
     const safeFacts  = Array.isArray(facts)  ? facts  : [];
     const safeSolars = Array.isArray(solars) ? solars : [];
 
     setErreur(null);
     setLoading(true);
     setPage("resultats");
-    setCurrentNetwork({ buses, branches }); 
+    setCurrentNetwork({ buses, branches, generators, version: networkVersion }); 
 
     try {
       const body = { buses, branches };
@@ -97,7 +101,7 @@ export default function App() {
   // ============================================================
   const appliquerDispositifs = (facts, solars) => {
     if (currentNetwork) {
-      lancerSimulation(currentNetwork.buses, currentNetwork.branches, facts, solars);
+      lancerSimulation(currentNetwork.buses, currentNetwork.branches, facts, solars, currentNetwork.generators);
     }
   };
 
@@ -106,44 +110,25 @@ export default function App() {
   // ============================================================
   const lancerStabilite = async (params) => {
     setStabilityData(null);
+    if (!currentNetwork || currentNetwork.version !== networkVersion) {
+      setStabilityData({error: "Calculez d'abord le Load Flow avec les données de saisie actuelles."});
+      return;
+    }
     setLoading(true);
     try {
-      const buses = [];
-      const branches = [];
-      for (let i = 1; i <= 14; i++) {
-        const type = String(form[`n${i}_type`] || "PQ").toUpperCase();
-        buses.push([
-          i, type === "SLACK" ? 3 : type === "PV" ? 2 : 1,
-          Number(form[`n${i}_p`] || 0) / 100,
-          Number(form[`n${i}_q`] || 0) / 100,
-          Number(form[`n${i}_v`] || 1),
-          Number(form[`n${i}_theta`] || 0),
-          Number(form[`n${i}_bsh`] || 0)
-        ]);
-      }
-      for (let i = 1; i <= 20; i++) {
-        if (form[`b${i}_dep`] && form[`b${i}_arr`]) {
-          branches.push([
-            Number(form[`b${i}_dep`]), Number(form[`b${i}_arr`]),
-            Number(form[`b${i}_r`] || 0), Number(form[`b${i}_x`] || 0.01),
-            Number(form[`b${i}_b`] || 0), Number(form[`b${i}_tap`] || 0)
-          ]);
-        }
-      }
       const response = await fetch(
         `${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/api/stability`,
-        {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ buses, branches, ...params })
-        }
+        {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            ...currentNetwork, facts: activeFacts, solars: activeSolars,
+            base_mva: Number(form.base_mva || 100), ...params,
+          })}
       );
       const data = await response.json();
-      if (!response.ok) throw new Error(
-        typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)
-      );
+      if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
       setStabilityData(data);
     } catch (error) {
-      setStabilityData({ error: error.message });
+      setStabilityData({error: error.message});
     } finally {
       setLoading(false);
     }
@@ -186,16 +171,16 @@ export default function App() {
       <div className="studio-main">
         <header className="studio-topbar">
           <div><div className="breadcrumbs">RECHERCHE / RÉSEAUX ÉLECTRIQUES / {current?.[1]?.toUpperCase()}</div><h1>{current?.[1]}</h1></div>
-          <div className="topbar-actions"><span className="version-chip">IEEE 14 nœuds</span><span className="version-chip light">v2.0</span>{(resultats || stabilityData) && <button className="reset-btn" onClick={reinitialiserDonnees}>Réinitialiser</button>}</div>
+          <div className="topbar-actions"><span className="version-chip">IEEE 14 nœuds</span>{(resultats || stabilityData) && <button className="reset-btn" onClick={reinitialiserDonnees}>Réinitialiser</button>}</div>
         </header>
         <div className="studio-content">
-          <div className="intro-banner"><div><span className="eyebrow">LABORATOIRE DE SIMULATION</span><h2>Analyse, compensation & optimisation</h2><p>Étude des flux de puissance, de l'intégration solaire et des dispositifs FACTS sur le réseau IEEE 14 nœuds.</p></div><div className="banner-orbit" aria-hidden="true"><span>14</span><small>BUS</small></div></div>
-          <div className="studio-kpis"><div><span>Nœuds</span><strong>14</strong></div><div><span>Branches</span><strong>20</strong></div><div><span>Puissance de base</span><strong>100 <small>MVA</small></strong></div><div><span>Analyse</span><strong>{loading ? "Calcul…" : resultats ? "Convergée" : "Prête"}</strong></div></div>
+          <div className="intro-banner"><div><span className="eyebrow">Université d'Antsiranane EDT-EnRE </span><h2>Analyse, compensation & optimisation</h2><p>Étude des flux de puissance, de l'intégration solaire et des dispositifs FACTS sur le réseau IEEE 14 nœuds.</p></div><div className="banner-orbit" aria-hidden="true"><span>14</span><small>BUS</small></div></div>
+          <div className="studio-kpis"><div><span>Nœuds</span><strong>{currentNetwork?.buses.length ?? Number(form.bus_count)}</strong></div><div><span>Branches</span><strong>{currentNetwork?.branches.length ?? Number(form.branch_count)}</strong></div><div><span>Puissance de base</span><strong>{Number(form.base_mva || 100)} <small>MVA</small></strong></div><div><span>Analyse</span><strong>{loading ? "Calcul…" : resultats ? "Convergée" : "Prête"}</strong></div></div>
       <main className="studio-workspace">
         {page === "saisie" && (
           <Saisie 
             form={form} 
-            setForm={setForm} 
+            setForm={(update) => { setForm(update); setNetworkVersion(v => v + 1); }} 
             onCalculer={lancerSimulation} 
           />
         )}
@@ -229,7 +214,7 @@ export default function App() {
         )}
         
         {page === "stabilite" && (
-          <Stabilite data={stabilityData} onSimuler={lancerStabilite} loading={loading} branches={DONNEES_IEEE14.branches} />
+          <Stabilite data={stabilityData} onSimuler={lancerStabilite} loading={loading} branches={currentNetwork?.branches || []} buses={currentNetwork?.buses || []} solars={activeSolars} generators={currentNetwork?.generators || []} />
         )}
 
         {/* NOUVELLE PAGE OPTIMISATION */}

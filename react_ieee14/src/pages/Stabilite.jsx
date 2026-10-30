@@ -1,157 +1,77 @@
 import { useState } from "react";
 
-const inputClass = "w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
-const field = (label, child) => (
-  <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-    {label}{child}
-  </label>
-);
-
-function Curve({ time, scenarios, keyName }) {
-  const series = Object.entries(scenarios || {}).flatMap(([name, scenario]) =>
-    (scenario.generators || []).map((g) => ({
-      name: `${name === "avec_facts" ? "Avec" : "Sans"} FACTS · Bus ${g.bus}`,
-      values: g[keyName] || []
-    }))
-  );
-  if (!series.length || !time?.length) return null;
-  const all = series.flatMap((s) => s.values).filter(Number.isFinite);
-  const maxAbs = Math.max(0.001, ...all.map(Math.abs));
-  const palette = ["#2563eb", "#059669", "#d97706", "#9333ea", "#dc2626"];
-  const pointString = (values) => values.map((v, i) =>
-    `${45 + i * 710 / Math.max(1, values.length - 1)},${145 - 110 * v / maxAbs}`
-  ).join(" ");
-  return (
-    <div className="rounded-xl border bg-white p-4">
-      <h3 className="font-semibold mb-2">{keyName === "delta" ? "Écart d'angle rotorique (°)" : "Écart de vitesse (p.u.)"}</h3>
-      <svg viewBox="0 0 800 290" className="w-full">
-        <rect x="45" y="30" width="710" height="230" fill="#f8fafc" />
-        <line x1="45" y1="145" x2="755" y2="145" stroke="#94a3b8" />
-        <text x="8" y="38" fontSize="11">{maxAbs.toFixed(3)}</text>
-        <text x="8" y="257" fontSize="11">{(-maxAbs).toFixed(3)}</text>
-        {series.map((s, i) => (
-          <polyline key={s.name} points={pointString(s.values)}
-            fill="none" stroke={palette[i % palette.length]}
-            strokeDasharray={s.name.startsWith("Avec") ? "6 3" : "none"}
-            strokeWidth="1.8" />
-        ))}
-        <text x="380" y="282" fontSize="12" textAnchor="middle">Temps (s) : 0 – {time[time.length - 1]}</text>
-      </svg>
-      <div className="flex flex-wrap gap-3 text-xs">
-        {series.map((s, i) => <span key={s.name} style={{color:palette[i % palette.length]}}>{s.name}</span>)}
-      </div>
-    </div>
-  );
+const fieldClass = "w-full border border-slate-300 rounded-lg p-2 bg-white";
+function Plot({ time = [], scenarios = {}, name, title }) {
+  const all = Object.entries(scenarios).flatMap(([key, s]) =>
+    (s.generators || []).map(g => ({ id: `${key}-${g.bus}`, label: `${key === 'avec_facts' ? 'Avec' : 'Sans'} FACTS · ${g.bus}`, values: g[name] || [], fact: key === 'avec_facts' })));
+  const values = all.flatMap(s => s.values).filter(Number.isFinite);
+  if (!time.length || !values.length) return null;
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const range = Math.max(hi - lo, 0.001);
+  const colors = ["#2563eb", "#059669", "#d97706", "#9333ea", "#dc2626", "#0891b2"];
+  const points = arr => arr.map((v, i) => `${55 + i * 700 / Math.max(1, time.length - 1)},${245 - (v - lo) / range * 200}`).join(" ");
+  return <div className="rounded-xl border p-4 bg-white">
+    <h3 className="font-semibold mb-3">{title}</h3>
+    <svg viewBox="0 0 800 285" className="w-full"><rect x="55" y="45" width="700" height="200" fill="#f8fafc"/>
+      <text x="3" y="50" fontSize="12">{hi.toFixed(2)}</text><text x="3" y="245" fontSize="12">{lo.toFixed(2)}</text>
+      {all.map((s, i) => <polyline key={s.id} fill="none" stroke={colors[i % colors.length]} strokeWidth="2" strokeDasharray={s.fact ? "6 3" : "none"} points={points(s.values)}/>)}
+      <text x="400" y="275" textAnchor="middle" fontSize="12">Temps (s) : {time[0]} – {time.at(-1)}</text>
+    </svg><div className="flex flex-wrap gap-3 text-xs">{all.map((s, i) => <span key={s.id} style={{color: colors[i % colors.length]}}>{s.label}</span>)}</div>
+  </div>;
 }
 
-export default function Stabilite({ data, onSimuler, loading, branches = [] }) {
-  const [params, setParams] = useState({
-    perturbation: "pv", bus_id: 14, line_index: 0,
-    start_time: 1, end_time: "", initial_power: 0, final_power: 50,
-    duration: 10, dt: 0.02, compare_facts: true,
-    fact_type: "SVC", fact_bus: 9, fact_b: -0.15,
-    inertia: 5, damping: 1, synchronizing: 4
-  });
-  const set = (key, value) => setParams((old) => ({ ...old, [key]: value }));
-  const num = (key, label, step = "any") => field(label,
-    <input className={inputClass} type="number" step={step}
-      value={params[key]} onChange={(e) => set(key, e.target.value)} />);
+export default function Stabilite({ data, onSimuler, loading, buses = [], branches = [], solars = [], generators = [] }) {
+  const [p, setP] = useState({ perturbation: 'load', bus_id: '', line_index: '', start_time: 1, end_time: '', initial_power: 0, final_power: 10, duration: 10, dt: 0.01, frequency_hz: 50, compare_facts: false, fact_type: 'SVC', fact_bus: '', fact_b: '', fact_branch_index: '', fact_compensation: '' });
+  const [error, setError] = useState('');
+  const set = (k, v) => setP(prev => ({...prev, [k]: v}));
+  const ids = buses.map(b => Number(b[0]));
+  const solarIds = [...new Set(solars.map(s => Number(s.bus_id)))];
+  const input = (key, title, step = 'any') => <label className="text-sm flex flex-col gap-1" key={key}>{title}<input className={fieldClass} type="number" step={step} value={p[key]} onChange={e => set(key, e.target.value)}/></label>;
+  const busSelect = (key, title, choices = ids) => <label className="text-sm flex flex-col gap-1" key={key}>{title}<select className={fieldClass} value={p[key]} onChange={e => set(key, e.target.value)}><option value="">Choisir un nœud</option>{choices.map(id => <option key={id} value={id}>Nœud {id}</option>)}</select></label>;
+  const lineSelect = (key, title) => <label className="text-sm flex flex-col gap-1" key={key}>{title}<select className={fieldClass} value={p[key]} onChange={e => set(key, e.target.value)}><option value="">Choisir une ligne</option>{branches.map((b, i) => <option key={i} value={i}>{b[0]} → {b[1]}</option>)}</select></label>;
   const run = () => {
-    const payload = { ...params };
-    for (const key of ["bus_id", "line_index", "start_time", "initial_power",
-      "final_power", "duration", "dt", "fact_bus", "fact_b",
-      "inertia", "damping", "synchronizing"]) {
-      payload[key] = Number(payload[key]);
-    }
-    payload.end_time = params.end_time === "" ? null : Number(params.end_time);
-    onSimuler(payload);
+    try {
+      if (!generators.length) throw Error('Sélectionnez les machines et leurs paramètres dans Saisie, puis lancez le Load Flow.');
+      if (p.perturbation !== 'line' && p.bus_id === '') throw Error('Sélectionnez le nœud perturbé.');
+      if (p.perturbation === 'line' && p.line_index === '') throw Error('Sélectionnez la ligne perturbée.');
+      if (p.perturbation === 'pv' && !solarIds.includes(Number(p.bus_id))) throw Error('Ajoutez une installation PV au nœud concerné dans Résultats Load Flow.');
+      if (p.compare_facts && p.fact_type === 'SVC' && (p.fact_bus === '' || p.fact_b === '')) throw Error('Renseignez le nœud et la susceptance SVC.');
+      if (p.compare_facts && p.fact_type === 'TCSC' && (p.fact_branch_index === '' || p.fact_compensation === '')) throw Error('Renseignez la ligne et la compensation TCSC.');
+      if (p.compare_facts && p.fact_type === 'UPFC') throw Error('UPFC dynamique non implémenté : modèle non disponible.');
+      if (Number(p.frequency_hz) <= 0) throw Error('Fréquence invalide.');
+      const payload = {...p, bus_id: p.perturbation === 'line' ? null : Number(p.bus_id), line_index: p.perturbation === 'line' ? Number(p.line_index) : null, end_time: p.end_time === '' ? null : Number(p.end_time), fact_bus: p.fact_bus === '' ? null : Number(p.fact_bus), fact_branch_index: p.fact_branch_index === '' ? null : Number(p.fact_branch_index)};
+      for (const key of ['start_time','initial_power','final_power','duration','dt','frequency_hz','fact_b','fact_compensation']) payload[key] = p[key] === '' ? 0 : Number(p[key]);
+      setError(''); onSimuler(payload);
+    } catch (e) {setError(e.message);}
   };
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-5 p-6">
-      <div>
-        <h1 className="text-2xl font-bold">Stabilité dynamique — GridFACTS Studio</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Perturbations PV, charge et ligne ; comparaison indicative avec/sans SVC.
-        </p>
+  return <div className="max-w-6xl mx-auto p-6 space-y-5">
+    <h1 className="text-2xl font-bold">Stabilité dynamique multimachines</h1>
+    <p className="text-sm text-slate-600">Machines issues de la saisie : {generators.length ? generators.map(g => `Bus ${g.bus_id} (H=${g.h}, D=${g.d}, Xd'=${g.xd})`).join(' · ') : 'Aucune machine configurée'}</p>
+    <div className="bg-white border rounded-xl p-5 space-y-4">
+      <div className="grid gap-4 md:grid-cols-3">
+        <label className="text-sm flex flex-col gap-1">Perturbation<select className={fieldClass} value={p.perturbation} onChange={e => {set('perturbation',e.target.value); setP(old => ({...old, perturbation:e.target.value,bus_id:'',line_index:''}));}}><option value="pv">Variation PV</option><option value="load">Variation de charge</option><option value="line">Ouverture de ligne</option></select></label>
+        {p.perturbation === 'line' ? lineSelect('line_index','Ligne') : busSelect('bus_id', 'Nœud', p.perturbation === 'pv' ? solarIds : ids)}
+        {input('start_time','Début perturbation (s)')}
+        {p.perturbation !== 'line' && input('initial_power','Puissance initiale (MW)')}
+        {p.perturbation !== 'line' && input('final_power','Puissance finale (MW)')}
+        {input('end_time','Fin perturbation (s) — vide = permanente')}
+        {input('duration','Durée totale (s)')}{input('dt','Pas de calcul (s)')}{input('frequency_hz','Fréquence (Hz)')}
       </div>
-      <div className="rounded-xl border bg-white p-5 space-y-4">
-        <h2 className="font-bold">Paramètres de simulation</h2>
-        <div className="grid gap-4 md:grid-cols-3">
-          {field("Perturbation",
-            <select className={inputClass} value={params.perturbation}
-              onChange={(e) => set("perturbation", e.target.value)}>
-              <option value="pv">Variation / perte de production PV</option>
-              <option value="load">Variation de charge</option>
-              <option value="line">Perte de ligne</option>
-              <option value="fault">Court-circuit (modèle non disponible)</option>
-            </select>)}
-          {params.perturbation === "line" ? field("Ligne à ouvrir",
-            <select className={inputClass} value={params.line_index}
-              onChange={(e) => set("line_index", Number(e.target.value))}>
-              {branches.map((b, i) =>
-                <option key={i} value={i}>{i + 1} : {b[0]} → {b[1]}</option>)}
-            </select>) : num("bus_id", "Nœud concerné", 1)}
-          {num("start_time", "Instant de perturbation (s)", 0.1)}
-          {["pv", "load"].includes(params.perturbation) && <>
-            {num("initial_power", "Puissance initiale (MW)", 1)}
-            {num("final_power", "Puissance finale (MW)", 1)}
-          </>}
-          {field("Fin de perturbation (s) — facultatif",
-            <input className={inputClass} type="number" step="0.1"
-              placeholder="Permanent" value={params.end_time}
-              onChange={(e) => set("end_time", e.target.value)} />)}
-          {num("duration", "Durée totale (s)", 1)}
-          {num("dt", "Pas de temps (s)", 0.01)}
-          {num("inertia", "Inertie équivalente H (s)", 0.5)}
-          {num("damping", "Amortissement équivalent D", 0.1)}
-          {num("synchronizing", "Coefficient synchronisant K", 0.5)}
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={params.compare_facts}
-            onChange={(e) => set("compare_facts", e.target.checked)} />
-          Comparer sans FACTS et avec FACTS (SVC)
-        </label>
-        {params.compare_facts && <div className="grid gap-4 md:grid-cols-3">
-          {num("fact_bus", "Nœud SVC", 1)}
-          {num("fact_b", "Susceptance SVC (p.u.)", 0.01)}
-          {field("Type FACTS", <input className={inputClass} value="SVC (modèle disponible)" disabled />)}
-        </div>}
-        <button type="button" onClick={run} disabled={loading}
-          className="rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white disabled:opacity-50">
-          {loading ? "Simulation en cours…" : "Simuler la stabilité dynamique"}
-        </button>
-      </div>
-      {data?.error && <div className="rounded-lg bg-red-50 border border-red-200 p-4 text-red-700">{data.error}</div>}
-      {data?.scenarios && <>
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <strong>Limite scientifique :</strong> {data.model_limitations}
-        </div>
-        <Curve time={data.time} scenarios={data.scenarios} keyName="delta" />
-        <Curve time={data.time} scenarios={data.scenarios} keyName="speed" />
-        <div className="rounded-xl border bg-white p-4 overflow-x-auto">
-          <h3 className="font-bold mb-3">Tensions avant / après perturbation</h3>
-          <table className="w-full text-sm">
-            <thead><tr className="border-b text-left">
-              <th className="p-2">Bus</th><th className="p-2">Sans FACTS avant</th>
-              <th className="p-2">Sans FACTS après</th>
-              {data.scenarios.avec_facts && <>
-                <th className="p-2">Avec FACTS avant</th>
-                <th className="p-2">Avec FACTS après</th></>}
-            </tr></thead>
-            <tbody>{data.scenarios.sans_facts.voltage_before.map((v, i) =>
-              <tr className="border-b" key={v.bus}>
-                <td className="p-2">{v.bus}</td>
-                <td className="p-2">{v.v.toFixed(4)}</td>
-                <td className="p-2">{data.scenarios.sans_facts.voltage_after[i].v.toFixed(4)}</td>
-                {data.scenarios.avec_facts && <>
-                  <td className="p-2">{data.scenarios.avec_facts.voltage_before[i].v.toFixed(4)}</td>
-                  <td className="p-2">{data.scenarios.avec_facts.voltage_after[i].v.toFixed(4)}</td>
-                </>}
-              </tr>)}</tbody>
-          </table>
-        </div>
-      </>}
+      <label className="flex items-center gap-2"><input type="checkbox" checked={p.compare_facts} onChange={e => set('compare_facts',e.target.checked)}/> Comparer avec et sans FACTS</label>
+      {p.compare_facts && <div className="grid gap-4 md:grid-cols-3">
+        <label className="text-sm flex flex-col gap-1">Type FACTS<select className={fieldClass} value={p.fact_type} onChange={e => set('fact_type',e.target.value)}><option>SVC</option><option>TCSC</option><option>UPFC</option></select></label>
+        {p.fact_type === 'SVC' && <>{busSelect('fact_bus','Nœud SVC')}{input('fact_b','Susceptance SVC (p.u.)')}</>}
+        {p.fact_type === 'TCSC' && <>{lineSelect('fact_branch_index','Ligne TCSC')}{input('fact_compensation','Compensation (%)')}</>}
+        {p.fact_type === 'UPFC' && <p className="text-sm text-amber-700">UPFC dynamique non disponible : aucun résultat fictif ne sera calculé.</p>}
+      </div>}
+      {(error || data?.error) && <p className="text-red-700">{error || data.error}</p>}
+      <button type="button" onClick={run} disabled={loading} className="bg-blue-600 text-white rounded-lg px-5 py-3 disabled:opacity-50">{loading ? 'Calcul en cours…' : 'Simuler'}</button>
     </div>
-  );
+    {data?.scenarios && <><p className="text-sm bg-amber-50 p-3 border rounded-lg">{data.model_limitations}</p>
+      <Plot time={data.time} scenarios={data.scenarios} name="delta" title="Variation des angles rotoriques (°)"/>
+      <Plot time={data.time} scenarios={data.scenarios} name="speed" title="Écart de vitesse (p.u.)"/>
+      <Plot time={data.time} scenarios={data.scenarios} name="relative_angle" title="Angles relatifs à la première machine (°)"/>
+      {Object.entries(data.scenarios).map(([key,s]) => <p key={key}>{key} : écart angulaire maximal = {s.max_relative_spread_deg?.toFixed(2)}° ; indicateur de perte de synchronisme : {s.loss_of_synchronism_indicator ? 'Oui' : 'Non'}</p>)}
+    </>}
+  </div>;
 }

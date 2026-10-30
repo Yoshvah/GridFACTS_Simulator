@@ -32,11 +32,19 @@ class SolarConfig(BaseModel):
     bus_id: int
     active_power: float
 
+class GeneratorConfig(BaseModel):
+    bus_id: int
+    h: float
+    d: float
+    xd: float
+
 class NetworkData(BaseModel):
     buses: list[list[float]]
     branches: list[list[float]]
     facts: list[FactsConfig] = []     
-    solars: list[SolarConfig] = [] 
+    solars: list[SolarConfig] = []
+    generators: list[GeneratorConfig] = []
+    base_mva: float = 100.0 
 
 class PSOConfig(BaseModel):
     num_particles: int = 30
@@ -58,24 +66,21 @@ class OptimizationRequest(NetworkData):
 
 class StabilityRequest(NetworkData):
     perturbation: str = "pv"
-    bus_id: int = 14
-    line_index: int = 0
+    bus_id: int | None = None
+    line_index: int | None = None
     start_time: float = 1.0
     end_time: float | None = None
     initial_power: float = 0.0
-    final_power: float = 50.0
+    final_power: float = 0.0
     duration: float = 10.0
     dt: float = 0.02
-    compare_facts: bool = True
+    frequency_hz: float
+    compare_facts: bool = False
     fact_type: str = "SVC"
-    fact_bus: int = 9
-    fact_b: float = -0.15
-    inertia: float = 5.0
-    damping: float = 1.0
-    synchronizing: float = 4.0
-    # Compatibilité ancien client
-    fault_bus: int | None = None
-    fault_clear_time: float | None = None
+    fact_bus: int | None = None
+    fact_b: float = 0.0
+    fact_branch_index: int | None = None
+    fact_compensation: float = 0.0
 
 # ============================================================
 # ENDPOINT : LOAD FLOW
@@ -105,7 +110,7 @@ def run_loadflow(data: NetworkData):
                     modified_branches[idx] = add_tcsc(modified_branches[idx], fact.param1)
 
         # 2. Calcul de la matrice Ybus de base
-        ids, ybus = calculate_ybus(buses, modified_branches, base_mva=100.0)
+        ids, ybus = calculate_ybus(buses, modified_branches, base_mva=data.base_mva)
         
         # 3. Application des dispositifs (SVC, STATCOM, UPFC)
         for fact in data.facts:
@@ -116,23 +121,23 @@ def run_loadflow(data: NetworkData):
                     ybus = add_svc(ybus, bus_idx, fact.param1)
                 
                 elif fact.type == "STATCOM":
-                    q_inj = add_statcom(fact.param1 / 100.0)
+                    q_inj = add_statcom(fact.param1 / data.base_mva)
                     buses[bus_idx][3] += q_inj
                     
                 elif fact.type == "UPFC":
-                    add_upfc(ybus, bus_idx, fact.param1 / 100.0, (fact.param2 or 0) / 100.0, 1.0)
-                    buses[bus_idx][2] += (fact.param1 / 100.0)
+                    add_upfc(ybus, bus_idx, fact.param1 / data.base_mva, (fact.param2 or 0) / data.base_mva, 1.0)
+                    buses[bus_idx][2] += (fact.param1 / data.base_mva)
                     if fact.param2 is not None:
-                        buses[bus_idx][3] += (fact.param2 / 100.0)
+                        buses[bus_idx][3] += (fact.param2 / data.base_mva)
 
         # 4. Panneaux Solaires
         for solar in data.solars:
             if solar.bus_id in ids:
                 bus_idx = ids.index(solar.bus_id)
-                buses[bus_idx][2] += (solar.active_power / 100.0)
+                buses[bus_idx][2] += (solar.active_power / data.base_mva)
 
         # 5. Load Flow
-        solver = PowerFlowSolver(100.0, buses, modified_branches)
+        solver = PowerFlowSolver(data.base_mva, buses, modified_branches)
         solver.Ybus = ybus 
         
         try:
@@ -142,7 +147,7 @@ def run_loadflow(data: NetworkData):
         
         # 6. Flux de branches
         Va_rad = np.radians(Va)
-        branch_flows = calculate_branch_flows(modified_branches, ids, Vm, Va_rad, 100.0)
+        branch_flows = calculate_branch_flows(modified_branches, ids, Vm, Va_rad, data.base_mva)
         
         flows_formatted = []
         for f in branch_flows:
@@ -189,14 +194,10 @@ def run_loadflow(data: NetworkData):
 # ============================================================
 @app.post("/api/stability")
 def run_stability(data: StabilityRequest):
-    """Réponse dynamique indicative avec réseau quasi-statique et swing linéarisé.
-
-    Les flux avant/après proviennent de Newton-Raphson; les angles/vitesses sont
-    issus d'un modèle équivalent simplifié, pas d'un modèle EMT/transitoire validé.
-    """
+    """Simulation classique multimachines issue de la saisie réseau."""
     try:
-        from calculations.stability_scenarios import simulate_scenarios
-        return simulate_scenarios(data)
+        from calculations.multimachine import simulate_multimachine
+        return simulate_multimachine(data)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:

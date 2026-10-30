@@ -49,7 +49,7 @@ export const DONNEES_IEEE14 = {
 // ============================================================
 // RÉSEAU INVALIDE (POUR TESTER LES ERREURS)
 // ============================================================
-export const DONNEES_INCORRECTES = {
+export const TEST = {
   buses: [
     [1, 3, 0, 0, 1.06, 0, 0],
     [2, 2, 18.3, 0, 1.045, 0, 0],
@@ -98,3 +98,59 @@ export const getTypeString = (typeNum) => {
   if (typeNum === 2) return "PV";
   return "PQ";
 };
+
+/*
+ * Paramètres dynamiques du cas de test IEEE 14 nœuds.
+ *
+ * ATTENTION :
+ * Les valeurs H, D et Xd′ ci-dessous sont des hypothèses
+ * pédagogiques de simulation, et non des données dynamiques
+ * normalisées du réseau IEEE 14.
+ *
+ * L'utilisateur peut les modifier dans Saisie.jsx.
+ */
+
+DONNEES_IEEE14.generators = [
+  {
+    bus_id: 1,
+    type: "generator",
+    h: 5.0,
+    d: 1.0,
+    xd: 0.25,
+  },
+  {
+    bus_id: 2,
+    type: "generator",
+    h: 4.0,
+    d: 1.0,
+    xd: 0.30,
+  },
+  {
+    bus_id: 3,
+    type: "condenser",
+    h: 3.0,
+    d: 1.0,
+    xd: 0.25,
+  },
+  {
+    bus_id: 6,
+    type: "condenser",
+    h: 3.0,
+    d: 1.0,
+    xd: 0.25,
+  },
+  {
+    bus_id: 8,
+    type: "condenser",
+    h: 3.0,
+    d: 1.0,
+    xd: 0.25,
+  },
+];
+
+// Le jeu de test alternatif peut réutiliser ces
+// hypothèses de machines pour tester un réseau surchargé.
+// Elles restent indépendantes du moteur de calcul.
+TEST.generators = DONNEES_IEEE14.generators.map(
+  (machine) => ({ ...machine })
+);
