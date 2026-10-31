@@ -303,7 +303,7 @@ function ValueCard({ bus, position, selected }) {
         fill="#1d4ed8"
         fontWeight="600"
       >
-        V : {bus.V.toFixed(3)} pu
+        V : {bus.V == null ? "—" : bus.V.toFixed(3)} pu
       </text>
 
       <text
@@ -312,7 +312,7 @@ function ValueCard({ bus, position, selected }) {
         fontSize="11.5"
         fill="#475569"
       >
-        θ : {bus.theta.toFixed(2)}°
+        θ : {bus.theta == null ? "—" : bus.theta.toFixed(2)}°
       </text>
 
       <text
@@ -321,7 +321,7 @@ function ValueCard({ bus, position, selected }) {
         fontSize="11.5"
         fill="#047857"
       >
-        P : {bus.P.toFixed(2)} MW
+        P : {bus.P == null ? "—" : bus.P.toFixed(2)} MW
       </text>
 
       <text
@@ -330,7 +330,7 @@ function ValueCard({ bus, position, selected }) {
         fontSize="11.5"
         fill="#b45309"
       >
-        Q : {bus.Q.toFixed(2)} MVAr
+        Q : {bus.Q == null ? "—" : bus.Q.toFixed(2)} MVAr
       </text>
     </g>
   );
@@ -350,23 +350,26 @@ export default function Schema({
   const hasResults =
     Array.isArray(resultats) && resultats.length > 0;
 
+  // La géométrie IEEE 14 est fixe, les valeurs proviennent UNIQUEMENT du Load Flow.
   const data = useMemo(() => {
+    const byBus = new Map(
+      (Array.isArray(resultats) ? resultats : []).map((r) => [Number(r.bus), r])
+    );
+    const numeric = (value) => {
+      if (value === null || value === undefined || value === "") return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    };
     return Object.entries(BUS).map(([id, layout]) => {
       const n = Number(id);
-
-      const result = resultats?.find(
-        (r) => Number(r.bus) === n
-      );
-
-      const ref = REFERENCE[n];
-
+      const r = byBus.get(n);
       return {
         id: n,
         ...layout,
-        V: Number(result?.V ?? ref[0]),
-        theta: Number(result?.theta ?? ref[1]),
-        P: Number(result?.P_MW ?? ref[2]),
-        Q: Number(result?.Q_MVAr ?? ref[3]),
+        V: numeric(r?.V),
+        theta: numeric(r?.theta),
+        P: numeric(r?.P_MW),
+        Q: numeric(r?.Q_MVAr),
       };
     });
   }, [resultats]);
@@ -399,7 +402,7 @@ export default function Schema({
           >
             {hasResults
               ? "Résultats de simulation"
-              : "Valeurs de référence"}
+              : "Calcul Load Flow nécessaire"}
           </div>
 
         </div>
