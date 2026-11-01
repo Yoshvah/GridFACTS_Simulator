@@ -4,14 +4,14 @@ import { DONNEES_IEEE14 } from "../data/ieee14";
 const defaults = {
   num_particles: 30, max_iter: 100,
   b_min: -0.15, b_max: 0.15,
-  pv_min: 0, pv_max: 50, solar_bus: 14,
+  pv_min: 0, pv_max: 50,
   w1: 1, w2: 1, inertia: 0.7, c1: 1.5, c2: 1.5, seed: 42,
 };
 const labels = {
   num_particles: "Particules", max_iter: "Itérations",
   b_min: "B SVC min (p.u.)", b_max: "B SVC max (p.u.)",
   pv_min: "PV min (MW)", pv_max: "PV max (MW)",
-  solar_bus: "Nœud PV", w1: "Poids tension (w1)",
+  w1: "Poids tension (w1)",
   w2: "Poids pertes (w2)", inertia: "Inertie",
   c1: "Coefficient c1", c2: "Coefficient c2", seed: "Seed",
 };
@@ -59,7 +59,7 @@ export default function Optimisation({ form }) {
   const extraireDonnees = () => {
     if (!form || Object.keys(form).length === 0) {
       return {
-        buses: DONNEES_IEEE14.buses.map((b, i) => [i + 1, b[1], (b[2] - b[3]) / 100, -b[4] / 100, b[5], b[6], b[7] || 0]),
+        buses: DONNEES_IEEE14.buses.map(b => [b[0], b[1], b[2] / 100, b[3] / 100, b[4], b[5], b[6]]),
         branches: DONNEES_IEEE14.branches.map(b => [b[0], b[1], b[2], b[3], b[4], b[5]]),
       };
     }
@@ -89,8 +89,7 @@ export default function Optimisation({ form }) {
           !Number.isInteger(cfg.max_iter) || cfg.max_iter < 1 || cfg.max_iter > 1000 ||
           cfg.b_min >= cfg.b_max || cfg.pv_min < 0 || cfg.pv_min > cfg.pv_max ||
           cfg.w1 < 0 || cfg.w2 < 0 || cfg.w1 + cfg.w2 === 0 ||
-          cfg.inertia < 0 || cfg.c1 < 0 || cfg.c2 < 0 ||
-          !Number.isInteger(cfg.solar_bus) || cfg.solar_bus < 1 || cfg.solar_bus > 14) {
+          cfg.inertia < 0 || cfg.c1 < 0 || cfg.c2 < 0) {
         throw new Error("Paramètres PSO invalides : vérifiez les bornes, les poids et les nombres entiers.");
       }
       const network = extraireDonnees();
@@ -121,7 +120,7 @@ export default function Optimisation({ form }) {
   return <div className="mx-auto max-w-7xl space-y-6 p-5 text-slate-800">
     <header>
       <h1 className="text-2xl font-bold">Optimisation PSO — GridFACTS Studio</h1>
-      <p className="mt-1 text-sm text-slate-500">Placement du SVC, réglage de susceptance et puissance photovoltaïque.</p>
+      <p className="mt-1 text-sm text-slate-500">Optimisation conjointe des nœuds PV et SVC, de la puissance PV et de la susceptance SVC.</p>
     </header>
 
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -137,7 +136,7 @@ export default function Optimisation({ form }) {
         </label>)}
       </div>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-4">
-        <p className="text-xs text-slate-500">Trois simulations de Load Flow seront calculées avec les mêmes données réseau.</p>
+        <p className="text-xs text-slate-500">Le PSO sélectionne automatiquement les nœuds PV et SVC parmi les nœuds admissibles du réseau chargé.</p>
         <button onClick={lancer} disabled={loading}
           className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">
           {loading ? "Calcul en cours..." : "Exécuter l'optimisation PSO"}
@@ -147,9 +146,10 @@ export default function Optimisation({ form }) {
 
     {error && <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
     {results && s && <>
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {[
-          ["Bus SVC", results.best_details.bus_svc],
+          ["Nœud PV optimal", results.best_details.bus_pv],
+          ["Nœud SVC optimal", results.best_details.bus_svc],
           ["B SVC (p.u.)", fmt(results.best_details.b_svc, 5)],
           ["PV optimisé (MW)", fmt(results.best_details.p_solar, 2)],
           ["Fitness final", fmt(results.best_score, 6)],
@@ -167,6 +167,7 @@ export default function Optimisation({ form }) {
           </tr></thead>
           <tbody>
             {[
+              ["Nœud PV", ["Aucun", `Bus ${results.best_details.bus_pv}`, `Bus ${results.best_details.bus_pv}`]],
               ["Puissance PV (MW)", [0, results.best_details.p_solar, results.best_details.p_solar]],
               ["SVC", ["Aucun", "Aucun", `Bus ${results.best_details.bus_svc}`]],
               ["B SVC (p.u.)", ["—", "—", fmt(results.best_details.b_svc, 5)]],

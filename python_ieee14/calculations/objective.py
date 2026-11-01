@@ -1,61 +1,96 @@
+
 import numpy as np
 from solver import PowerFlowSolver
 from calculations.power_flows import calculate_branch_flows
 
-def compute_objective(base_mva, buses, branches, bus_target, b_svc, p_solar, w1=1.0, w2=1.0, solar_bus=14):
+
+def compute_objective(
+    base_mva, buses, branches,
+    bus_target, b_svc, p_solar,
+    w1=1.0, w2=1.0, solar_bus=None
+):
     try:
+        if solar_bus is None:
+            raise ValueError("Le nœud PV doit être fourni par le PSO.")
+
         buses_copy = [list(b) for b in buses]
-        
-        # 1. Appliquer le SVC
-        idx_svc = next((i for i, b in enumerate(buses_copy) if int(b[0]) == bus_target), None)
-        if idx_svc is None: return 1e9, {}
-        buses_copy[idx_svc][6] += b_svc
-        
-        # 2. Appliquer le Solaire (sur le Bus 14 par exemple, ou on peut l'ajouter au bus cible)
-        # Ici, on va l'ajouter au bus 14 (index 13) pour l'exemple
-        idx_solar = next((i for i, b in enumerate(buses_copy) if int(b[0]) == solar_bus), None)
-        if idx_solar is not None:
-            buses_copy[idx_solar][2] += (p_solar / base_mva) # P_solar en MW divisé par base MVA
-
-        # 3. Load Flow
-        solver = PowerFlowSolver(base_mva, buses_copy, branches)
-        Vm, Va, _, _, _ = solver.solve()
-
-        Va_rad = np.radians(Va)
         ids = [int(b[0]) for b in buses_copy]
-        flows = calculate_branch_flows(branches, ids, Vm, Va_rad, base_mva)
-        
-        # Pertes actives réelles, en MW (partie réelle des pertes complexes).
-        total_losses = float(sum(float(np.real(f["loss_mva"])) for f in flows))
-        if not np.isfinite(total_losses) or not np.all(np.isfinite(Vm)):
+
+        if bus_target not in ids or solar_bus not in ids:
             return 1e9, {}
 
-        # 5. Pénalités
-        slack_idx = next((i for i, b in enumerate(buses) if int(b[1]) == 3), None)
-        V_ref = 1.0
+        idx_svc = ids.index(bus_target)
+        idx_solar = ids.index(solar_bus)
+
+        # Compensation SVC
+        buses_copy[idx_svc][6] += float(b_svc)
+
+        # Injection photovoltaïque
+        buses_copy[idx_solar][2] += float(p_solar) / base_mva
+
+        # Calcul de répartition des puissances
+        solver = PowerFlowSolver(
+            base_mva, buses_copy, branches
+        )
+        Vm, Va, _, _, _ = solver.solve()
+
+        Vm = np.asarray(Vm, dtype=float)
+        Va = np.asarray(Va, dtype=float)
+
+        if not np.all(np.isfinite(Vm)) or not np.all(np.isfinite(Va)):
+            return 1e9, {}
+
+        flows = calculate_branch_flows(
+            branches, ids, Vm, np.radians(Va), base_mva
+        )
+
+        total_losses = float(sum(
+            np.real(f["loss_mva"]) for f in flows
+        ))
+
+        if not np.isfinite(total_losses) or total_losses < -1e-6:
+            return 1e9, {}
+
         voltage_errors = 0.0
         penalty = 0.0
 
-        for i in range(len(Vm)):
-            if i == slack_idx: continue
-            voltage_errors += (Vm[i] - V_ref) ** 2
-            if Vm[i] < 0.95: penalty += (0.95 - Vm[i]) * 10000
-            elif Vm[i] > 1.05: penalty += (Vm[i] - 1.05) * 10000
+        for i, bus in enumerate(buses_copy):
+            bus_type = int(bus[1])
+            v = float(Vm[i])
 
-        F = w1 * voltage_errors + w2 * (total_losses / 100.0) + penalty
+            # Écart de tension sur les nœuds PQ
+            if bus_type == 1:
+                voltage_errors += (v - 1.0) ** 2
+
+                if v < 0.95:
+                    penalty += (0.95 - v) * 10000
+                elif v > 1.05:
+                    penalty += (v - 1.05) * 10000
+
+            # Les nœuds PV et Slack conservent leurs
+            # consignes de tension dans ce modèle.
+            # Leurs limites spécifiques restent à vérifier.
+
+        fitness = (
+            w1 * voltage_errors
+            + w2 * (total_losses / base_mva)
+            + penalty
+        )
 
         details = {
-            "bus_svc": bus_target,
-            "b_svc": round(b_svc, 4),
-            "p_solar": round(p_solar, 2),
-            "losses": round(total_losses, 3),
-            "v_min": round(float(min(Vm)), 4),
-            "v_max": round(float(max(Vm)), 4),
-            "voltage_errors": round(voltage_errors, 5),
-            "penalty": round(penalty, 2)
+            "bus_pv": int(solar_bus),
+            "bus_svc": int(bus_target),
+            "b_svc": round(float(b_svc), 5),
+            "p_solar": round(float(p_solar), 2),
+            "losses": round(total_losses, 4),
+            "v_min": round(float(np.min(Vm)), 4),
+            "v_max": round(float(np.max(Vm)), 4),
+            "voltage_errors": round(float(voltage_errors), 6),
+            "penalty": round(float(penalty), 4)
         }
-        return F, details
+
+        return float(fitness), details
 
     except Exception as e:
-        print(f"Erreur dans compute_objective: {e}")
+        print(f"Erreur dans compute_objective : {e}")
         return 1e9, {}
