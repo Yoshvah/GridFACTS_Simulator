@@ -53,7 +53,6 @@ class PSOConfig(BaseModel):
     b_max: float = 0.15
     pv_min: float = 0.0
     pv_max: float = 50.0
-    solar_bus: int = 14
     w1: float = 1.0
     w2: float = 1.0
     inertia: float = 0.7
@@ -219,13 +218,16 @@ def run_optimization(data: OptimizationRequest):
         if cfg.inertia < 0 or cfg.c1 < 0 or cfg.c2 < 0:
             raise HTTPException(422, "Coefficients PSO invalides")
         ids = [int(b[0]) for b in data.buses]
-        if len(ids) != len(set(ids)) or cfg.solar_bus not in ids:
-            raise HTTPException(422, "Nœuds invalides ou nœud solaire absent")
+        if len(ids) != len(set(ids)):
+            raise HTTPException(422, "Identifiants de nœuds invalides")
         if not all(len(b) >= 7 for b in data.buses):
             raise HTTPException(422, "Chaque nœud doit avoir 7 colonnes")
         admissible = [int(b[0]) for b in data.buses if int(b[1]) != 3]
-        if not admissible:
-            raise HTTPException(422, "Aucun nœud admissible pour le SVC")
+        # PV : nœuds PQ uniquement ; SVC : tous les nœuds hors Slack.
+        # Les listes proviennent du réseau envoyé par React, sans numéro codé en dur.
+        admissible_pv = [int(b[0]) for b in data.buses if int(b[1]) == 1]
+        if not admissible or not admissible_pv:
+            raise HTTPException(422, "Aucun nœud admissible pour le SVC ou le PV")
 
         # Cas 1 : réseau d'entrée sans ajouts de PV/FACTS par le PSO.
         # Utiliser une saisie de base sans injection préexistante pour ce test.
@@ -235,21 +237,23 @@ def run_optimization(data: OptimizationRequest):
 
         pso = PSO(
             base_mva=100.0, buses=buses_initial, branches=branches,
-            admissible_buses=admissible, w1=cfg.w1, w2=cfg.w2,
+            admissible_buses=admissible, admissible_pv_buses=admissible_pv,
+            w1=cfg.w1, w2=cfg.w2,
             num_particles=cfg.num_particles, max_iter=cfg.max_iter,
             b_min=cfg.b_min, b_max=cfg.b_max,
             pv_min=cfg.pv_min, pv_max=cfg.pv_max,
-            solar_bus=cfg.solar_bus, inertia=cfg.inertia,
+            inertia=cfg.inertia,
             c1=cfg.c1, c2=cfg.c2, seed=cfg.seed
         )
         best_pos, best_score, best_details, history = pso.optimize()
         pv_mw = float(best_pos[2])
         svc_b = float(best_pos[1])
         svc_bus = int(best_details["bus_svc"])
+        pv_bus = int(best_details["bus_pv"])
 
         # Cas 2 : même réseau + PV optimisé, SANS SVC.
         buses_pv = [list(b) for b in buses_initial]
-        next(b for b in buses_pv if int(b[0]) == cfg.solar_bus)[2] += pv_mw / 100.0
+        next(b for b in buses_pv if int(b[0]) == pv_bus)[2] += pv_mw / 100.0
         pv_only = get_network_metrics(100.0, buses_pv, branches)
 
         # Cas 3 : réseau + même PV + SVC optimisé.
